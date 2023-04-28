@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
+import { TOKENS } from 'config';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
 @Injectable()
@@ -8,13 +9,17 @@ export class AtStrategy extends PassportStrategy(Strategy, 'jwt') {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: 'at-secret',
+      secretOrKey: TOKENS.ACCESS_TOKEN_SECRET,
     });
   }
 
   validate(payload: any) {
     return payload;
+
+    // req.user = payload
   }
 
-  getFin() {}
+  getFin() {
+    console.log('hello');
+  }
 }
