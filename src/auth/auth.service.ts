@@ -58,8 +58,35 @@ export class AuthService {
 
     return user;
   }
+  
+  // Password Validation
+  validatePassword(password: string) {
+    const requirements = [
+      { regex: /.{8,}/, index: 0, message: 'Min 8 Characters' },
+      { regex: /[0-9]/, index: 1, message: 'Atleast One Number' },
+      { regex: /[a-z]/, index: 2, message: 'Atleast One Lowercase Letter' },
+      { regex: /[A-Z]/, index: 3, message: 'Atleast One Uppercase Letter' },
+      {
+        regex: /[^A-Za-z0-9]/,
+        index: 4,
+        message: 'Atleast One Special Character',
+      },
+    ];
+
+    // Checking If The Password Matches The Requirement Regex
+    requirements.forEach((item) => {
+      const isValid = item.regex.test(password);
+
+      if (!isValid)
+        throw new HttpException(
+          `Password Validation Failed: ${item.message}`,
+          HttpStatus.FORBIDDEN,
+        );
+    });
+  }
 
   async signin(signInDto: UserLoginDto): Promise<Object> {
+     
     // Checking If User Is Valid Or Not
     const user = await this.validateUser(
       signInDto.username,
@@ -79,6 +106,31 @@ export class AuthService {
   }
 
   async signup(signUpDto: CreateUserDto): Promise<Object> {
+    // Check if the username contains spaces or any special characters
+    if (signUpDto.username.includes(' ')) {
+      throw new HttpException('Username cannot contain spaces', 400);
+    }
+    // Check if user exists
+    // If not, create user
+    // If yes, return error
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: signUpDto.username.toLowerCase() },
+          { email: signUpDto.email.toLowerCase() },
+        ],
+      },
+    });
+
+    if (user) throw new HttpException('User already exists', 400);
+
+    // Validating Password
+    this.validatePassword(signUpDto.password);
+
+    // Hashing Password
+    const hashedPassword = await argon.hash(signUpDto.password);
+    signUpDto.password = hashedPassword;
+    
     // Creates A New User
     const { id, email, ...newUser } = await this.userService.create(signUpDto);
 
