@@ -1,5 +1,6 @@
 # COMPLETE AUTHENTICATION IN NESTJS
 
+```
 # Database
 
 DATABASE_URL="postgresql://postgres:prostgres@localhost:5000/auth?schema=public"
@@ -14,3 +15,4 @@ REFRESH_TOKEN_HASH_SECRET=rtHashSecret
 
 JWT_ACCESS_TOKEN_EXPIRES_IN=15m
 JWT_REFRESH_TOKEN_EXPIRES_IN=7d
+```
