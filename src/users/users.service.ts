@@ -40,14 +40,16 @@ export class UsersService {
     return this.prismaService.user.findUnique({ where: { email } });
   }
 
-  findAll() {
-    return this.prismaService.user.findMany();
+  async findAll() {
+    return await this.prismaService.user.findMany();
   }
 
-  findOne(id: string) {
-    return this.prismaService.user.findUnique({
+  async findOne(id: string) {
+    const { password, ...user } = await this.prismaService.user.findUnique({
       where: { id },
     });
+
+    return user;
   }
 
   async update(id: string, updateUserDto: UpdateUserDto) {

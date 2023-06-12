@@ -3,6 +3,7 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserLoginDto, UpdatePasswordDto } from './dto';
@@ -30,15 +31,27 @@ export class AuthService {
 
   // Generates Access & Refresh Token
   async generateTokens(payload: any): Promise<Tokens> {
-    const accessToken = await this.jwtService.signAsync(payload, {
-      secret: TOKENS.ACCESS_TOKEN_SECRET,
-      expiresIn: TOKENS.ACCESS_EXPIRES_IN,
-    });
+    const accessToken = await this.jwtService.signAsync(
+      {
+        id: payload.id,
+        role: payload.role,
+      },
+      {
+        secret: TOKENS.ACCESS_TOKEN_SECRET,
+        expiresIn: TOKENS.ACCESS_EXPIRES_IN,
+      },
+    );
 
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      secret: TOKENS.REFRESH_TOKEN_SECRET,
-      expiresIn: TOKENS.REFRESH_EXPIRES_IN,
-    });
+    const refreshToken = await this.jwtService.signAsync(
+      {
+        id: payload.id,
+        role: payload.role,
+      },
+      {
+        secret: TOKENS.REFRESH_TOKEN_SECRET,
+        expiresIn: TOKENS.REFRESH_EXPIRES_IN,
+      },
+    );
 
     return {
       access_token: accessToken,
@@ -58,7 +71,7 @@ export class AuthService {
 
     return user;
   }
-  
+
   // Password Validation
   validatePassword(password: string) {
     const requirements = [
@@ -86,7 +99,6 @@ export class AuthService {
   }
 
   async signin(signInDto: UserLoginDto): Promise<Object> {
-     
     // Checking If User Is Valid Or Not
     const user = await this.validateUser(
       signInDto.username,
@@ -130,7 +142,7 @@ export class AuthService {
     // Hashing Password
     const hashedPassword = await argon.hash(signUpDto.password);
     signUpDto.password = hashedPassword;
-    
+
     // Creates A New User
     const { id, email, ...newUser } = await this.userService.create(signUpDto);
 
@@ -144,7 +156,7 @@ export class AuthService {
     };
   }
 
-  async forgetPassword(email: string): Promise<object> {
+  async forgotPassword(email: string): Promise<object> {
     const user = this.userService.findOneByEmail(email);
 
     if (!user) throw new BadRequestException('Invalid Email');
@@ -174,7 +186,7 @@ export class AuthService {
     try {
       await this.mailerService.sendMail({
         to: email,
-        from: 'NepTechPal <no-reply@krishmagar.com>',
+        from: 'New Email <no-reply@krishmagar.com>',
         subject: 'Reset Password Link',
         text: 'Click On The Button Below To Reset Password',
         html: `${sendResetEmail(newResetPassword.pass_reset_token)}`,
@@ -192,10 +204,7 @@ export class AuthService {
     }
   }
 
-  async resetPassword(
-    reset_token: bigint,
-    newPassword: string,
-  ): Promise<Object> {
+  async resetPassword(reset_token: bigint, newPassword: string) {
     // Checking If Valid Token Exists & If the Token Has Not Expired
     const user = await this.prisma.resetPassword.findFirst({
       where: {
@@ -203,13 +212,12 @@ export class AuthService {
         pass_reset_token_expires: { gt: Date.now() },
       },
     });
-
     if (!user) throw new HttpException('Reset Token Has Expired', 498);
-
+    // Validating Password
+    this.validatePassword(newPassword);
     // If User Exists Then Reset Password
     const hashedPassword = await argon.hash(newPassword);
-
-    const userWithNewPass = await this.prisma.user.update({
+    const { password, ...userWithNewPass } = await this.prisma.user.update({
       where: {
         email: user.email,
       },
@@ -217,19 +225,34 @@ export class AuthService {
         password: hashedPassword,
       },
     });
-
     // Removing the Field from "Reset Password Database"
     await this.prisma.resetPassword.delete({
       where: {
         email: user.email,
       },
     });
-
     // Logging In User & Sending Access Token And Refresh Token
-    const { id, email } = userWithNewPass;
-
-    const tokens = await this.generateTokens({ id, email });
-
+    const tokens = await this.generateTokens(userWithNewPass);
+    const hashPresent = await this.prisma.refreshTokenHash.findFirst({
+      where: {
+        user_id: userWithNewPass.id,
+      },
+    });
+    let hashedRefreshToken = await argon.hash(tokens.refresh_token);
+    // RefreshToken
+    await this.prisma.refreshTokenHash.upsert({
+      where: {
+        id: hashPresent.id,
+      },
+      update: {
+        token_hash: hashedRefreshToken,
+        user_id: userWithNewPass.id,
+      },
+      create: {
+        token_hash: hashedRefreshToken,
+        user_id: userWithNewPass.id,
+      },
+    });
     return {
       message: 'Password Reset Successfully !!!',
       ...tokens,
@@ -247,10 +270,13 @@ export class AuthService {
     if (!(await argon.verify(user.password, updatePasswordDto.password)))
       throw new HttpException('Incorrect Password', HttpStatus.UNAUTHORIZED);
 
+    // Validating Password
+    this.validatePassword(updatePasswordDto.newPassword);
+
     // Changing Password
     const hashedPassword = await argon.hash(updatePasswordDto.newPassword);
 
-    const { id, email, ...updatedUser } = await this.prisma.user.update({
+    const { password, ...updatedUser } = await this.prisma.user.update({
       where: {
         email: user.email,
       },
@@ -260,7 +286,18 @@ export class AuthService {
     });
 
     // Sending Access Token &  Refresh Token Again
-    const tokens = await this.generateTokens({ id, email });
+    const tokens = await this.generateTokens(updatedUser);
+
+    let hashedRefreshToken = await argon.hash(tokens.refresh_token);
+
+    await this.prisma.refreshTokenHash.update({
+      where: {
+        user_id: updatedUser.id,
+      },
+      data: {
+        token_hash: hashedRefreshToken,
+      },
+    });
 
     return {
       message: 'Password Updated Successfully !!!',
@@ -268,22 +305,26 @@ export class AuthService {
     };
   }
 
-  async refreshToken(me: Object) {
-    try {
-      // Generating & Sending Access & Refresh Tokens
-      const id = me['id'];
-      const email = me['email'];
+  async refreshToken(me: Object, refresh_token: string) {
+    const { password, ...currentUserWithHash } =
+      await this.prisma.user.findFirst({
+        where: {
+          id: me['id'],
+        },
+        include: {
+          refreshTokenHash: true,
+        },
+      });
 
-      const tokens = await this.generateTokens({ id, email });
+    const hashMatched = await argon.verify(
+      currentUserWithHash.refreshTokenHash.token_hash,
+      refresh_token,
+    );
 
-      return {
-        message: 'New Access & Refresh Tokens',
-        ...tokens,
-      };
-    } catch (e) {
-      return {
-        message: 'Something Went Wrong Generating New Access & Refresh Tokens',
-      };
+    if (!hashMatched) {
+      throw new InternalServerErrorException('Invalid refresh token');
     }
+    // If the refresh token is valid, generate a new access and refresh token
+    return this.generateTokens(currentUserWithHash);
   }
 }
