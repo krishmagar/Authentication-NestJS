@@ -4,7 +4,7 @@
 name: Node.js CI
 
 on:
-  pull_request:
+  push:
     branches: [ main ]
 
 jobs:
@@ -24,6 +24,20 @@ jobs:
     - run: npm ci
     - run: npm i -g pm2
     - run: npm run build --if-present
+    - name: Deploy using ssh
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        key: ${{ secrets.SSH_PRIV_KEY }}
+        port: 22
+        script: |
+          cd /home/Authentication-NestJS
+          git pull origin main
+          git status
+          npm install
+          npm run build
+          pm2 restart api
     
     
 						
