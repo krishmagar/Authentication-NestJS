@@ -30,4 +30,4 @@ jobs:
           git status
           npm install
           npm run build
-          pm2 restart api
+          pm2 restart auth-api
